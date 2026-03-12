@@ -4,53 +4,57 @@ export async function executeCommands(ip: string, username: string, password: st
   return new Promise((resolve, reject) => {
     const conn = new Client();
     const results: Record<string, string> = {};
+    let output = '';
+    let isResolved = false;
+
+    const cleanup = () => {
+      if (!isResolved) {
+        isResolved = true;
+        conn.end();
+        results['session'] = output;
+        resolve(results);
+      }
+    };
 
     conn.on('ready', () => {
-      let current = 0;
-      
-      const next = () => {
-        if (current >= commands.length) {
-          conn.end();
-          resolve(results);
+      conn.shell({ term: 'vt100' }, (err, stream) => {
+        if (err) {
+          if (!isResolved) {
+            isResolved = true;
+            conn.end();
+            reject(err);
+          }
           return;
         }
-        
-        const cmd = commands[current];
-        let cmdTimeout: NodeJS.Timeout;
 
-        conn.exec(cmd, (err, stream) => {
-          if (err) {
-            results[cmd] = `Error executing command: ${err.message}`;
-            current++;
-            next();
-            return;
-          }
-          
-          let output = '';
-          
-          cmdTimeout = setTimeout(() => {
-            results[cmd] = output + '\n[Command timed out after 10 seconds]';
-            stream.close();
-            current++;
-            next();
-          }, 10000); // 10 seconds timeout per command
-
-          stream.on('close', () => {
-            clearTimeout(cmdTimeout);
-            results[cmd] = output;
-            current++;
-            next();
-          }).on('data', (data: any) => {
-            output += data.toString();
-          }).stderr.on('data', (data: any) => {
-            output += data.toString();
-          });
+        stream.on('close', () => {
+          cleanup();
+        }).on('data', (data: any) => {
+          output += data.toString();
+        }).stderr.on('data', (data: any) => {
+          output += data.toString();
         });
-      };
-      
-      next();
+
+        // Send all commands separated by newline
+        for (const cmd of commands) {
+          stream.write(cmd + '\n');
+        }
+        
+        // Send exit commands to gracefully close the session
+        stream.write('exit\n');
+        stream.write('quit\n');
+
+        // Fallback timeout to close the stream if the device doesn't disconnect automatically
+        setTimeout(() => {
+          stream.close();
+          cleanup();
+        }, 20000); // 20 seconds max for the whole session
+      });
     }).on('error', (err) => {
-      reject(err);
+      if (!isResolved) {
+        isResolved = true;
+        reject(err);
+      }
     }).connect({
       host: ip,
       port: 22,
