@@ -74,22 +74,38 @@ export function parseRawData(rawData: string, vendor: string): TopologyData {
   // Fallback to mock data if no neighbors were parsed
   if (links.length === 0) {
     nodes = [
-      { id: 'R1', hostname: extractedHostname, ip: '10.0.0.1', vendor: vendor as any, hardware_model: extractedHardware, role: 'core' },
-      { id: 'SW1', hostname: 'Dist-SW1', ip: '10.0.0.2', vendor: vendor as any, hardware_model: 'Nexus 9000', role: 'distribution' },
-      { id: 'SW2', hostname: 'Acc-SW2', ip: '10.0.0.3', vendor: vendor as any, hardware_model: 'WS-C2960X', role: 'access' },
-      { id: 'FW1', hostname: 'Edge-FW1', ip: '10.0.0.254', vendor: vendor as any, hardware_model: 'SRX300', role: 'firewall' },
+      { 
+        id: 'R1', hostname: extractedHostname, ip: '10.0.0.1', vendor: vendor as any, hardware_model: extractedHardware, role: 'core',
+        os_version: 'IOS XE 16.9.5', serial_number: 'FOC2345ABCD', uptime: '45 days, 12:30', mac_address: '00:1A:2B:3C:4D:5E'
+      },
+      { 
+        id: 'SW1', hostname: 'Dist-SW1', ip: '10.0.0.2', vendor: vendor as any, hardware_model: 'Nexus 93180YC-EX', role: 'distribution',
+        os_version: 'NX-OS 9.3(8)', serial_number: 'JAF1234XYZ', uptime: '120 days, 08:15', mac_address: '00:1A:2B:3C:4D:5F'
+      },
+      { 
+        id: 'SW2', hostname: 'Acc-SW2', ip: '10.0.0.3', vendor: vendor as any, hardware_model: 'WS-C9200L-48P-4G', role: 'access',
+        os_version: 'IOS XE 17.3.4', serial_number: 'FOC9876QWER', uptime: '12 days, 01:10', mac_address: '00:1A:2B:3C:4D:60'
+      },
+      { 
+        id: 'FW1', hostname: 'Edge-FW1', ip: '10.0.0.254', vendor: vendor as any, hardware_model: 'FPR2110', role: 'firewall',
+        os_version: 'FTD 7.0.1', serial_number: 'JMX5678ASDF', uptime: '200 days, 22:45', mac_address: '00:1A:2B:3C:4D:61'
+      },
     ];
 
     links = [
-      // L1 Links
-      { id: 'l1_1', source: 'R1', target: 'SW1', src_port: 'Gi0/0/1', dst_port: 'Eth1/1', layer: 'L1', protocol: 'lldp' },
-      { id: 'l1_2', source: 'SW1', target: 'SW2', src_port: 'Eth1/2', dst_port: 'Gi1/0/1', layer: 'L1', protocol: 'lldp' },
-      { id: 'l1_3', source: 'R1', target: 'FW1', src_port: 'Gi0/0/2', dst_port: 'ge-0/0/0', layer: 'L1', protocol: 'lldp' },
-      // L2 Links
-      { id: 'l2_1', source: 'SW1', target: 'SW2', src_port: 'Po1', dst_port: 'Po1', layer: 'L2', protocol: 'stp' },
-      // L3 Links
-      { id: 'l3_1', source: 'R1', target: 'SW1', src_port: 'Vlan10', dst_port: 'Vlan10', layer: 'L3', protocol: 'ospf' },
-      { id: 'l3_2', source: 'R1', target: 'FW1', src_port: '10.0.0.1', dst_port: '10.0.0.254', layer: 'L3', protocol: 'bgp' },
+      // L1 Links (Physical)
+      { id: 'l1_1', source: 'R1', target: 'SW1', src_port: 'Gi0/0/1', dst_port: 'Eth1/1', layer: 'L1', protocol: 'lldp', speed: '10G', state: 'up/up', transceiver: 'SFP-10G-LR' },
+      { id: 'l1_2', source: 'SW1', target: 'SW2', src_port: 'Eth1/2', dst_port: 'Gi1/0/1', layer: 'L1', protocol: 'lldp', speed: '1G', state: 'up/up', transceiver: 'GLC-TE' },
+      { id: 'l1_3', source: 'SW1', target: 'SW2', src_port: 'Eth1/3', dst_port: 'Gi1/0/2', layer: 'L1', protocol: 'lldp', speed: '1G', state: 'up/up', transceiver: 'GLC-TE' },
+      { id: 'l1_4', source: 'R1', target: 'FW1', src_port: 'Gi0/0/2', dst_port: 'Eth1/1', layer: 'L1', protocol: 'cdp', speed: '10G', state: 'up/up', transceiver: 'SFP-10G-SR' },
+      
+      // L2 Links (Logical)
+      { id: 'l2_1', source: 'SW1', target: 'SW2', src_port: 'Po1', dst_port: 'Po1', layer: 'L2', protocol: 'stp', vlan: 'Trunk (10,20,30)', stp_state: 'FWD', stp_role: 'Root', port_channel: 'Po1' },
+      { id: 'l2_2', source: 'SW2', target: 'SW1', src_port: 'Po1', dst_port: 'Po1', layer: 'L2', protocol: 'stp', vlan: 'Trunk (10,20,30)', stp_state: 'FWD', stp_role: 'Desg', port_channel: 'Po1' },
+      
+      // L3 Links (Routing)
+      { id: 'l3_1', source: 'R1', target: 'SW1', src_port: 'Vlan10', dst_port: 'Vlan10', layer: 'L3', protocol: 'ospf', src_ip: '10.0.10.1', dst_ip: '10.0.10.2', subnet: '/24', routing_area: 'Area 0', metric: '10' },
+      { id: 'l3_2', source: 'R1', target: 'FW1', src_port: '10.0.254.1', dst_port: '10.0.254.2', layer: 'L3', protocol: 'bgp', src_ip: '10.0.254.1', dst_ip: '10.0.254.2', subnet: '/30', routing_as: 'AS 65001', metric: '0' },
     ];
   }
 
