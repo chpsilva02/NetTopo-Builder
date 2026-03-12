@@ -7,7 +7,11 @@ export function generateDrawioXml(topology: TopologyData): string {
     .ele('mxfile', { version: '14.6.13' });
 
   const layers = ['L1', 'L2', 'L3'];
-  const layerNames = { L1: 'Layer 1 (Physical)', L2: 'Layer 2 (Data Link)', L3: 'Layer 3 (Routing)' };
+  const layerNames = { 
+    L1: 'Topologia Layer 1 (Física - baseada em LLDP/CDP)', 
+    L2: 'Topologia Layer 2 (Lógica - baseada em STP e VLANs)', 
+    L3: 'Topologia Layer 3 (Roteamento - baseada em Tabela de Rotas, OSPF, BGP)' 
+  };
 
   layers.forEach((layer) => {
     const diagram = root.ele('diagram', { name: layerNames[layer as keyof typeof layerNames], id: `page_${layer}` });
