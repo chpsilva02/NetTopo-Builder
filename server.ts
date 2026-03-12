@@ -49,7 +49,7 @@ async function startServer() {
       let rawOutputs: Record<string, string> = {};
       let rawText = '';
 
-      const ipList = ip.split(',').map((i: string) => i.trim()).filter(Boolean);
+      const ipList = ip.split(/[,;\s]+/).map((i: string) => i.trim()).filter(Boolean);
 
       for (const singleIp of ipList) {
         try {
@@ -64,7 +64,7 @@ async function startServer() {
         } catch (sshError: any) {
           console.error(`SSH Error for ${singleIp}:`, sshError);
           return res.status(500).json({ 
-            error: `Falha na conexão SSH com ${singleIp}. Verifique se o IP é acessível a partir da nuvem e se as credenciais estão corretas. Detalhes: ${sshError.message}` 
+            error: `Falha na conexão SSH com ${singleIp}. Verifique se o IP é acessível e se as credenciais estão corretas. Detalhes: ${sshError.message}` 
           });
         }
       }
