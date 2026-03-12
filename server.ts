@@ -49,17 +49,24 @@ async function startServer() {
       let rawOutputs: Record<string, string> = {};
       let rawText = '';
 
-      try {
-        // Execute real SSH commands
-        rawOutputs = await executeCommands(ip, username, password, allCommands);
-        rawText = Object.entries(rawOutputs)
-          .map(([cmd, out]) => `--- COMMAND: ${cmd} ---\n${out}\n`)
-          .join('\n');
-      } catch (sshError: any) {
-        console.error('SSH Error:', sshError);
-        return res.status(500).json({ 
-          error: `Falha na conexão SSH com ${ip}. Verifique se o IP é acessível a partir da nuvem e se as credenciais estão corretas. Detalhes: ${sshError.message}` 
-        });
+      const ipList = ip.split(',').map((i: string) => i.trim()).filter(Boolean);
+
+      for (const singleIp of ipList) {
+        try {
+          // Execute real SSH commands for each IP
+          const outputs = await executeCommands(singleIp, username, password, allCommands);
+          
+          Object.entries(outputs).forEach(([cmd, out]) => {
+            const key = `[${singleIp}] ${cmd}`;
+            rawOutputs[key] = out;
+            rawText += `--- COMMAND: ${key} ---\n${out}\n`;
+          });
+        } catch (sshError: any) {
+          console.error(`SSH Error for ${singleIp}:`, sshError);
+          return res.status(500).json({ 
+            error: `Falha na conexão SSH com ${singleIp}. Verifique se o IP é acessível a partir da nuvem e se as credenciais estão corretas. Detalhes: ${sshError.message}` 
+          });
+        }
       }
 
       const topology = parseRawData(rawText, vendor);
