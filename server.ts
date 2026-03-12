@@ -26,12 +26,25 @@ async function startServer() {
     
     try {
       // Flatten all commands to execute
-      const allCommands = [
+      let allCommands = [
         ...(customCommands.l1 || []),
         ...(customCommands.l2 || []),
         ...(customCommands.l3 || []),
         ...(customCommands.hardware || [])
       ].filter(Boolean);
+
+      // Prepend pagination disable commands based on vendor
+      if (vendor === 'cisco_ios' || vendor === 'cisco_nxos') {
+        allCommands.unshift('terminal length 0');
+      } else if (vendor === 'aruba_os') {
+        allCommands.unshift('no paging');
+      } else if (vendor === 'hpe_comware') {
+        allCommands.unshift('screen-length disable');
+      } else if (vendor === 'juniper_junos') {
+        allCommands.unshift('set cli screen-length 0');
+      } else if (vendor === 'huawei_vrp') {
+        allCommands.unshift('screen-length 0 temporary');
+      }
 
       let rawOutputs: Record<string, string> = {};
       let rawText = '';
@@ -61,13 +74,33 @@ async function startServer() {
   });
 
   app.post('/api/upload', upload.array('files'), (req, res) => {
-    const vendor = req.body.vendor || 'cisco_ios';
-    // Parse uploaded files
-    const topology = parseRawData(`Simulated file parsing`, vendor);
-    const positionedTopology = applyLayout(topology);
-    const xml = generateDrawioXml(positionedTopology);
+    try {
+      const vendor = req.body.vendor || 'cisco_ios';
+      const files = req.files as Express.Multer.File[];
+      
+      if (!files || files.length === 0) {
+        return res.status(400).json({ error: 'Nenhum arquivo enviado.' });
+      }
 
-    res.json({ xml, topology: positionedTopology });
+      // Concatenate all file contents into a single raw text string
+      let rawText = '';
+      let rawOutputs: Record<string, string> = {};
+
+      files.forEach(file => {
+        const content = file.buffer.toString('utf-8');
+        rawText += `--- FILE: ${file.originalname} ---\n${content}\n\n`;
+        rawOutputs[`File: ${file.originalname}`] = content;
+      });
+
+      const topology = parseRawData(rawText, vendor);
+      const positionedTopology = applyLayout(topology);
+      const xml = generateDrawioXml(positionedTopology);
+
+      res.json({ xml, topology: positionedTopology, rawOutputs });
+    } catch (error: any) {
+      console.error('Upload Error:', error);
+      res.status(500).json({ error: `Erro interno ao processar arquivos: ${error.message}` });
+    }
   });
 
   // Vite middleware

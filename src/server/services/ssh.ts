@@ -16,6 +16,8 @@ export async function executeCommands(ip: string, username: string, password: st
         }
         
         const cmd = commands[current];
+        let cmdTimeout: NodeJS.Timeout;
+
         conn.exec(cmd, (err, stream) => {
           if (err) {
             results[cmd] = `Error executing command: ${err.message}`;
@@ -25,7 +27,16 @@ export async function executeCommands(ip: string, username: string, password: st
           }
           
           let output = '';
+          
+          cmdTimeout = setTimeout(() => {
+            results[cmd] = output + '\n[Command timed out after 10 seconds]';
+            stream.close();
+            current++;
+            next();
+          }, 10000); // 10 seconds timeout per command
+
           stream.on('close', () => {
+            clearTimeout(cmdTimeout);
             results[cmd] = output;
             current++;
             next();
