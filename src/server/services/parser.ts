@@ -3,14 +3,32 @@ import { TopologyData, TopologyNode, TopologyLink } from '../../shared/types';
 function normalizePort(port: string): string {
   let p = port.replace(/\s+/g, '');
   if (/^gigabitethernet/i.test(p)) return p.replace(/^gigabitethernet/i, 'Gi');
+  if (/^gig/i.test(p)) return p.replace(/^gig/i, 'Gi');
   if (/^fastethernet/i.test(p)) return p.replace(/^fastethernet/i, 'Fa');
+  if (/^fas/i.test(p)) return p.replace(/^fas/i, 'Fa');
   if (/^tengigabitethernet/i.test(p)) return p.replace(/^tengigabitethernet/i, 'Te');
+  if (/^ten/i.test(p)) return p.replace(/^ten/i, 'Te');
   if (/^twentyfivegige/i.test(p)) return p.replace(/^twentyfivegige/i, 'Twe');
   if (/^fortygigabitethernet/i.test(p)) return p.replace(/^fortygigabitethernet/i, 'Fo');
   if (/^hundredgigabitethernet/i.test(p)) return p.replace(/^hundredgigabitethernet/i, 'Hu');
   if (/^ethernet/i.test(p)) return p.replace(/^ethernet/i, 'Eth');
+  if (/^eth/i.test(p)) return p.replace(/^eth/i, 'Eth');
   if (/^port-channel/i.test(p)) return p.replace(/^port-channel/i, 'Po');
   return p;
+}
+
+function determineRole(hostname: string, model: string): string {
+  const h = hostname.toLowerCase();
+  const m = model.toLowerCase();
+  
+  if (h.includes('fw') || m.includes('firewall') || m.includes('srx') || m.includes('asa') || m.includes('fpr')) return 'firewall';
+  if (h.includes('rtr') || h.includes('router') || m.includes('isr') || m.includes('asr') || m.includes('c8200') || m.includes('c1100')) return 'router';
+  if (h.includes('core') || m.includes('nexus') || m.includes('n9k') || m.includes('c9500') || m.includes('c9600')) return 'core';
+  if (h.includes('dist') || m.includes('c9400') || m.includes('c3850') || m.includes('c3750')) return 'distribution';
+  if (h.includes('sw') || m.includes('switch') || m.includes('c2960') || m.includes('c9200') || m.includes('c9300')) return 'access';
+  if (h.startsWith('sep') || m.includes('phone') || m.includes('room') || m.includes('bar') || m.includes('endpoint')) return 'endpoint';
+  
+  return 'access'; // default
 }
 
 export function parseRawData(rawData: string, vendor: string): TopologyData {
@@ -28,13 +46,14 @@ export function parseRawData(rawData: string, vendor: string): TopologyData {
         ip: '',
         vendor: vendor as any,
         hardware_model: 'Unknown',
-        role: hostname.toLowerCase().includes('sw') ? 'access' : (hostname.toLowerCase().includes('fw') ? 'firewall' : 'core')
+        role: determineRole(hostname, 'Unknown')
       };
     }
 
     const hwMatch = blockData.match(/(?:cisco|hardware|model)\s+(WS-C\w+|C\d+|Nexus\s+\d+|ISR\d+|ASR\d+|FPR\d+|SRX\d+)/i);
     if (hwMatch && hwMatch[1] && nodesMap[hostname].hardware_model === 'Unknown') {
       nodesMap[hostname].hardware_model = hwMatch[1];
+      nodesMap[hostname].role = determineRole(hostname, hwMatch[1]);
     }
 
     // --- PARSE CDP DETAIL ---
@@ -87,22 +106,49 @@ export function parseRawData(rawData: string, vendor: string): TopologyData {
     }
 
     // --- PARSE TABULAR CDP/LLDP ---
-    const tabularRegex = /^([a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*)\s+([A-Za-z]+\s*\d+(?:\/\d+)*)\s+\d+\s+.*?\s+([A-Za-z]+\s*\d+(?:\/\d+)*)$/gm;
-    let match;
-    while ((match = tabularRegex.exec(blockData)) !== null) {
-      let remoteDevice = match[1].split('.')[0];
-      let localPort = normalizePort(match[2]);
-      let remotePort = normalizePort(match[3]);
-
-      const exists = extractedLinks.some(l => l.sourceDevice === hostname && l.remoteDevice === remoteDevice && l.localPort === localPort && l.remotePort === remotePort);
-      if (!exists) {
-        extractedLinks.push({
-          sourceDevice: hostname,
-          remoteDevice,
-          localPort,
-          remotePort,
-          protocol: 'cdp/lldp'
-        });
+    const lines = blockData.split('\n');
+    let pendingDevice = '';
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line || line.startsWith('Device ID') || line.startsWith('Capability') || line.startsWith('Local Intf')) continue;
+      
+      const intfRegex = /(?:^|\s)([A-Za-z]{2,}\s*[\d\/\.]+)\s+\d+\s+.*?\s+([A-Za-z]*\s*[\d\/\.]+|eth\d+|mgmt\d+)$/i;
+      const match = line.match(intfRegex);
+      
+      if (match) {
+        let remoteDevice = '';
+        const firstToken = line.split(/\s+/)[0];
+        
+        const isInterface = /^(Gi|Gig|GigabitEthernet|Fa|Fas|FastEthernet|Te|Ten|TenGigabitEthernet|Twe|TwentyFiveGigE|Fo|FortyGigabitEthernet|Hu|HundredGigabitEthernet|Eth|Ethernet|Po|Port-channel)\s*[\d\/\.]+$/i.test(firstToken);
+        
+        if (isInterface && line.indexOf(firstToken) === match.index) {
+          remoteDevice = pendingDevice;
+        } else {
+          remoteDevice = firstToken;
+        }
+        
+        if (remoteDevice) {
+          remoteDevice = remoteDevice.split('.')[0];
+          let localPort = normalizePort(match[1]);
+          let remotePort = normalizePort(match[2]);
+          
+          const exists = extractedLinks.some(l => l.sourceDevice === hostname && l.remoteDevice === remoteDevice && l.localPort === localPort && l.remotePort === remotePort);
+          if (!exists) {
+            extractedLinks.push({
+              sourceDevice: hostname,
+              remoteDevice,
+              localPort,
+              remotePort,
+              protocol: 'cdp/lldp'
+            });
+          }
+        }
+        pendingDevice = '';
+      } else {
+        if (line.split(/\s+/).length === 1) {
+          pendingDevice = line;
+        }
       }
     }
 
@@ -128,7 +174,7 @@ export function parseRawData(rawData: string, vendor: string): TopologyData {
     }
   }
 
-  const parts = rawData.split(/^([a-zA-Z0-9_-]+)[#>]/m);
+  const parts = rawData.split(/^([a-zA-Z0-9_-\.]+)[#>]/m);
   if (parts.length === 1) {
     parseBlock('Unknown-Device', rawData);
   } else {
@@ -155,11 +201,14 @@ export function parseRawData(rawData: string, vendor: string): TopologyData {
         ip: link.remoteIp || '',
         vendor: 'unknown' as any,
         hardware_model: link.remoteModel || 'Unknown',
-        role: rDevice.toLowerCase().includes('sw') ? 'access' : (rDevice.toLowerCase().includes('fw') ? 'firewall' : 'distribution')
+        role: determineRole(rDevice, link.remoteModel || 'Unknown')
       };
     } else {
       if (link.remoteIp && !nodesMap[rDevice].ip) nodesMap[rDevice].ip = link.remoteIp;
-      if (link.remoteModel && nodesMap[rDevice].hardware_model === 'Unknown') nodesMap[rDevice].hardware_model = link.remoteModel;
+      if (link.remoteModel && nodesMap[rDevice].hardware_model === 'Unknown') {
+        nodesMap[rDevice].hardware_model = link.remoteModel;
+        nodesMap[rDevice].role = determineRole(rDevice, link.remoteModel);
+      }
     }
 
     const devices = [sDevice, rDevice].sort();
