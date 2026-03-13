@@ -177,30 +177,33 @@ export function parseRawData(rawData: string, vendor: string): TopologyData {
   }
 
   // Add L2 Links based on STP and L1 adjacency
+  // Group by localPort to avoid duplicating links for every VLAN on a trunk
+  const l2ByPort: Record<string, { vlan: string, role: string, state: string }> = {};
   for (const l2 of extractedL2Links) {
-    // Try to find the remote device from L1 links
-    const l1Link = extractedLinks.find(l => l.localPort === l2.localPort);
-    const rDevice = l1Link ? l1Link.remoteDevice : `Unknown_L2_${l2.localPort}`;
-    const rPort = l1Link ? l1Link.remotePort : 'Unknown';
-
-    if (!nodesMap[rDevice]) {
-      nodesMap[rDevice] = {
-        id: rDevice,
-        hostname: rDevice,
-        ip: '',
-        vendor: 'unknown' as any,
-        hardware_model: 'Unknown',
-        role: 'access'
-      };
+    if (!l2ByPort[l2.localPort]) {
+      l2ByPort[l2.localPort] = l2;
+    } else if (l2ByPort[l2.localPort].state !== l2.state) {
+      l2ByPort[l2.localPort].state = 'Mixed'; // PVST/MST with different states per VLAN
     }
+  }
 
-    const linkKey = `L2_${localHostname}_${l2.localPort}_${rDevice}_${l2.vlan}`;
+  for (const [localPort, l2] of Object.entries(l2ByPort)) {
+    // Cross-reference with L1 (CDP/LLDP) to find the remote device
+    const l1Link = extractedLinks.find(l => l.localPort === localPort);
+    
+    // If we don't know the neighbor via CDP/LLDP, DO NOT create a fake "Unknown" node.
+    if (!l1Link) continue;
+
+    const rDevice = l1Link.remoteDevice;
+    const rPort = l1Link.remotePort;
+
+    const linkKey = `L2_${localHostname}_${localPort}_${rDevice}`;
     if (!linksMap[linkKey]) {
       linksMap[linkKey] = {
         id: `l2_${linkIdCounter++}`,
         source: localHostname,
         target: rDevice,
-        src_port: l2.localPort,
+        src_port: `${localPort} > ${l2.state}`,
         dst_port: rPort,
         layer: 'L2',
         protocol: 'stp',
