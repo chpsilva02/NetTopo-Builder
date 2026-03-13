@@ -107,22 +107,41 @@ export function parseRawData(rawData: string, vendor: string): TopologyData {
 
     // --- PARSE TABULAR CDP/LLDP ---
     const lines = blockData.split('\n');
+    let inTable = false;
     let pendingDevice = '';
     
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
-      if (!line || line.startsWith('Device ID') || line.startsWith('Capability') || line.startsWith('Local Intf')) continue;
       
-      const intfRegex = /(?:^|\s)([A-Za-z0-9]+\s*[\d\/\.]+)\s+\d+\s+.*?\s+(\S+)$/i;
+      // Detect start of table
+      if (line.match(/^(Device ID|System Name|Local Intf)/i)) {
+        inTable = true;
+        pendingDevice = '';
+        continue;
+      }
+      
+      // Detect end of table
+      if (inTable && (line === '' || line.match(/^[a-zA-Z0-9_.-]+[#>]/))) {
+        inTable = false;
+        continue;
+      }
+
+      if (!inTable) continue;
+      if (line.startsWith('Capability') || line.startsWith('Port ID')) continue;
+      
+      // Strict regex for local interface to avoid matching VLANs or MAC addresses
+      const intfRegex = /(?:^|\s)(Gi|Gig|GigabitEthernet|Fa|Fas|FastEthernet|Te|Ten|TenGigabitEthernet|Twe|TwentyFiveGigE|Fo|FortyGigabitEthernet|Hu|HundredGigabitEthernet|Eth|Ethernet|Po|Port-channel)\s*([\d\/\.]+)\s+\d+\s+.*?\s+([A-Za-z]*\s*[\d\/\.]+|eth\d+|mgmt\d+|\S+)$/i;
       const match = line.match(intfRegex);
       
       if (match) {
         let remoteDevice = '';
         const firstToken = line.split(/\s+/)[0];
+        const localPortFull = match[1] + match[2];
+        const remotePortFull = match[3];
         
-        const isInterface = /^(Gi|Gig|GigabitEthernet|Fa|Fas|FastEthernet|Te|Ten|TenGigabitEthernet|Twe|TwentyFiveGigE|Fo|FortyGigabitEthernet|Hu|HundredGigabitEthernet|Eth|Ethernet|Po|Port-channel)\s*[\d\/\.]+$/i.test(firstToken);
+        const isInterface = /^(Gi|Gig|GigabitEthernet|Fa|Fas|FastEthernet|Te|Ten|TenGigabitEthernet|Twe|TwentyFiveGigE|Fo|FortyGigabitEthernet|Hu|HundredGigabitEthernet|Eth|Ethernet|Po|Port-channel)/i.test(firstToken);
         
-        if (isInterface && line.indexOf(firstToken) === match.index) {
+        if (isInterface) {
           remoteDevice = pendingDevice;
         } else {
           remoteDevice = firstToken;
@@ -130,8 +149,8 @@ export function parseRawData(rawData: string, vendor: string): TopologyData {
         
         if (remoteDevice) {
           remoteDevice = remoteDevice.split('.')[0];
-          let localPort = normalizePort(match[1]);
-          let remotePort = normalizePort(match[2]);
+          let localPort = normalizePort(localPortFull);
+          let remotePort = normalizePort(remotePortFull);
           
           const exists = extractedLinks.some(l => l.sourceDevice === hostname && l.remoteDevice === remoteDevice && l.localPort === localPort && l.remotePort === remotePort);
           if (!exists) {
