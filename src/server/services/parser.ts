@@ -37,6 +37,12 @@ export function parseRawData(rawData: string, vendor: string): TopologyData {
 
   const extractedLinks: Array<{ sourceDevice: string, remoteDevice: string, localPort: string, remotePort: string, protocol: string, remoteIp?: string, remoteModel?: string }> = [];
   const extractedL2Links: Array<{ sourceDevice: string, localPort: string, vlan: string, role: string, state: string }> = [];
+  
+  // L3 Extraction Arrays
+  const ipToDevice: Record<string, string> = {};
+  const extractedOspf: Array<{ sourceDevice: string, neighborIp: string, localPort: string, state: string }> = [];
+  const extractedBgp: Array<{ sourceDevice: string, neighborIp: string, as: string, state: string }> = [];
+  const extractedRoutes: Array<{ sourceDevice: string, code: string, prefix: string, nextHop: string, localPort: string }> = [];
 
   function parseBlock(hostname: string, blockData: string) {
     if (!nodesMap[hostname]) {
@@ -195,6 +201,70 @@ export function parseRawData(rawData: string, vendor: string): TopologyData {
         }
       }
     }
+
+    // --- PARSE L3 (ROUTING & NEIGHBORS) ---
+    let currentRouteCode = '';
+    let currentPrefix = '';
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      
+      // IP to Device mapping from interfaces
+      const intfIpMatch = line.match(/Internet address is ([0-9\.]+)\/\d+/i);
+      if (intfIpMatch) ipToDevice[intfIpMatch[1]] = hostname;
+
+      // OSPF Neighbor
+      const ospfMatch = line.match(/^([0-9\.]+)\s+\d+\s+(FULL|2WAY|INIT|EXSTART|EXCHANGE|LOADING)[^\s]*\s+[0-9\:]+\s+([0-9\.]+)\s+([A-Za-z0-9\/\.-]+)/i);
+      if (ospfMatch) {
+        extractedOspf.push({
+          sourceDevice: hostname,
+          neighborIp: ospfMatch[3],
+          localPort: normalizePort(ospfMatch[4]),
+          state: ospfMatch[2]
+        });
+        ipToDevice[ospfMatch[1]] = ospfMatch[3]; // Map Router ID to Interface IP for resolution
+      }
+
+      // BGP Neighbor
+      const bgpMatch = line.match(/^([0-9\.]+)\s+\d+\s+(\d+)\s+\d+\s+\d+\s+\d+\s+\d+\s+\d+\s+([0-9a-zA-Z]+)/i);
+      if (bgpMatch) {
+        extractedBgp.push({
+          sourceDevice: hostname,
+          neighborIp: bgpMatch[1],
+          as: bgpMatch[2],
+          state: bgpMatch[3]
+        });
+      }
+
+      // Routing Table
+      const localRouteMatch = line.match(/^L\s+([0-9\.]+)\/32\s+is directly connected/i);
+      if (localRouteMatch) ipToDevice[localRouteMatch[1]] = hostname;
+
+      const routeHeaderMatch = line.match(/^([A-Za-z\*]{1,4})\s+([0-9\.\/]+)/);
+      if (routeHeaderMatch && !line.includes('via') && !line.includes('connected')) {
+        currentRouteCode = routeHeaderMatch[1].trim();
+        currentPrefix = routeHeaderMatch[2].trim();
+      }
+
+      const viaMatch = line.match(/via\s+([0-9\.]+)(?:,\s*[0-9\:]+)?(?:,\s*([A-Za-z0-9\/\.-]+))?/i);
+      if (viaMatch) {
+        let code = currentRouteCode;
+        let prefix = currentPrefix;
+        if (routeHeaderMatch) {
+          code = routeHeaderMatch[1].trim();
+          prefix = routeHeaderMatch[2].trim();
+        }
+        if (code) {
+          extractedRoutes.push({
+            sourceDevice: hostname,
+            code: code,
+            prefix: prefix,
+            nextHop: viaMatch[1],
+            localPort: viaMatch[2] ? normalizePort(viaMatch[2]) : ''
+          });
+        }
+      }
+    }
   }
 
   const parts = rawData.split(/^([a-zA-Z0-9_.-]+)[#>]/m);
@@ -300,6 +370,72 @@ export function parseRawData(rawData: string, vendor: string): TopologyData {
        linksMap[linkKey].dst_stp_role = l2.role;
        linksMap[linkKey].dst_stp_state = l2.state;
     }
+  }
+
+  // --- BUILD L3 TOPOLOGY ---
+  const l3LinksMap: Record<string, TopologyLink> = {};
+
+  function addL3Link(source: string, targetIp: string, protocol: string, srcPort: string = '', extra: any = {}) {
+    const targetDevice = ipToDevice[targetIp] || targetIp;
+    if (source === targetDevice) return; // Ignore self links
+
+    const devices = [source, targetDevice].sort();
+    const linkKey = `L3_${devices[0]}_${devices[1]}_${protocol}`;
+
+    if (!l3LinksMap[linkKey]) {
+      l3LinksMap[linkKey] = {
+        id: `l3_${linkIdCounter++}`,
+        source: source,
+        target: targetDevice,
+        src_port: srcPort,
+        dst_port: '',
+        layer: 'L3',
+        protocol: protocol as any,
+        dst_ip: targetIp,
+        ...extra
+      };
+    }
+  }
+
+  for (const ospf of extractedOspf) {
+    addL3Link(ospf.sourceDevice, ospf.neighborIp, 'ospf', ospf.localPort, { state: ospf.state });
+  }
+
+  for (const bgp of extractedBgp) {
+    addL3Link(bgp.sourceDevice, bgp.neighborIp, 'bgp', '', { routing_as: `AS ${bgp.as}`, state: bgp.state });
+  }
+
+  for (const route of extractedRoutes) {
+    let proto = 'unknown';
+    const code = route.code.replace('*', '').trim();
+    if (code.startsWith('O')) proto = 'ospf';
+    else if (code.startsWith('B')) proto = 'bgp';
+    else if (code.startsWith('D')) proto = 'eigrp';
+    else if (code.startsWith('S')) proto = 'static';
+    else if (code.startsWith('i')) proto = 'isis';
+    else continue;
+
+    const targetDevice = ipToDevice[route.nextHop] || route.nextHop;
+    const devices = [route.sourceDevice, targetDevice].sort();
+    const linkKey = `L3_${devices[0]}_${devices[1]}_${proto}`;
+    
+    if (!l3LinksMap[linkKey]) {
+      addL3Link(route.sourceDevice, route.nextHop, proto, route.localPort, { subnet: route.prefix });
+    }
+  }
+
+  for (const link of Object.values(l3LinksMap)) {
+    if (!nodesMap[link.target]) {
+      nodesMap[link.target] = {
+        id: link.target,
+        hostname: link.target,
+        ip: link.dst_ip || '',
+        vendor: 'unknown',
+        hardware_model: 'Unknown L3 Node',
+        role: 'router'
+      };
+    }
+    linksMap[link.id] = link;
   }
 
   let nodes = Object.values(nodesMap);
