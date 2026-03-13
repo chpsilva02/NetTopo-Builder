@@ -174,7 +174,7 @@ export function parseRawData(rawData: string, vendor: string): TopologyData {
     }
   }
 
-  const parts = rawData.split(/^([a-zA-Z0-9_-\.]+)[#>]/m);
+  const parts = rawData.split(/^([a-zA-Z0-9_.-]+)[#>]/m);
   if (parts.length === 1) {
     parseBlock('Unknown-Device', rawData);
   } else {
