@@ -76,10 +76,21 @@ export function generateDrawioXml(topology: TopologyData): string {
       const edgeId = `${layer}_link_${link.id}`;
       const centerLabel = buildLinkCenterLabel(link, layer);
       
+      let edgeStyle = 'endArrow=none;html=1;rounded=0;strokeWidth=2;strokeColor=#444444;labelBackgroundColor=#ffffff;fontColor=#333333;fontSize=10;';
+      
+      // Apply specific styling for L2 STP states
+      if (layer === 'L2' && link.stp_state) {
+        if (link.stp_state === 'BLK' || link.stp_state === 'Altn' || link.stp_state === 'DIS') {
+          edgeStyle = 'endArrow=none;html=1;rounded=0;strokeWidth=2;strokeColor=#ff0000;dashed=1;labelBackgroundColor=#ffffff;fontColor=#333333;fontSize=10;';
+        } else if (link.stp_state === 'FWD') {
+          edgeStyle = 'endArrow=none;html=1;rounded=0;strokeWidth=2;strokeColor=#008000;labelBackgroundColor=#ffffff;fontColor=#333333;fontSize=10;';
+        }
+      }
+
       const edge = rootCell.ele('mxCell', {
         id: edgeId,
         value: centerLabel,
-        style: 'endArrow=none;html=1;rounded=0;strokeWidth=2;strokeColor=#444444;labelBackgroundColor=#ffffff;fontColor=#333333;fontSize=10;',
+        style: edgeStyle,
         edge: '1',
         parent: `root_${layer}_1`,
         source: `${layer}_node_${link.source}`,

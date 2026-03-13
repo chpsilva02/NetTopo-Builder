@@ -111,6 +111,30 @@ export function parseRawData(rawData: string, vendor: string): TopologyData {
     }
   }
 
+  // --- PARSE SPANNING TREE (L2 TOPOLOGY) ---
+  const extractedL2Links: Array<{ localPort: string, vlan: string, role: string, state: string }> = [];
+  
+  // Split by VLAN or Instance to get context
+  const stpBlocks = rawData.split(/(?=VLAN\s*\d+|Spanning tree instance)/i);
+  for (const block of stpBlocks) {
+    const vlanMatch = block.match(/(?:VLAN|Spanning tree instance)\s*0*(\d+)/i);
+    const vlanId = vlanMatch ? vlanMatch[1] : null;
+
+    if (vlanId) {
+      // Match STP interface lines like: Gi0/1  Root FWD 4  128.1  P2p
+      const portRegex = /^([A-Za-z0-9\/\.-]+)\s+(Root|Desg|Altn|Back|Mstr|Shr|None)\s+(FWD|BLK|LRN|LIS|BKN|DIS)\s+(\d+)/gm;
+      let portMatch;
+      while ((portMatch = portRegex.exec(block)) !== null) {
+        extractedL2Links.push({
+          localPort: normalizePort(portMatch[1]),
+          vlan: vlanId,
+          role: portMatch[2],
+          state: portMatch[3]
+        });
+      }
+    }
+  }
+
   // --- DEDUPLICATE AND BUILD TOPOLOGY ---
   let linkIdCounter = 1;
   
@@ -149,6 +173,41 @@ export function parseRawData(rawData: string, vendor: string): TopologyData {
       if (!linksMap[linkKey].protocol.includes(link.protocol)) {
         linksMap[linkKey].protocol += `/${link.protocol}`;
       }
+    }
+  }
+
+  // Add L2 Links based on STP and L1 adjacency
+  for (const l2 of extractedL2Links) {
+    // Try to find the remote device from L1 links
+    const l1Link = extractedLinks.find(l => l.localPort === l2.localPort);
+    const rDevice = l1Link ? l1Link.remoteDevice : `Unknown_L2_${l2.localPort}`;
+    const rPort = l1Link ? l1Link.remotePort : 'Unknown';
+
+    if (!nodesMap[rDevice]) {
+      nodesMap[rDevice] = {
+        id: rDevice,
+        hostname: rDevice,
+        ip: '',
+        vendor: 'unknown' as any,
+        hardware_model: 'Unknown',
+        role: 'access'
+      };
+    }
+
+    const linkKey = `L2_${localHostname}_${l2.localPort}_${rDevice}_${l2.vlan}`;
+    if (!linksMap[linkKey]) {
+      linksMap[linkKey] = {
+        id: `l2_${linkIdCounter++}`,
+        source: localHostname,
+        target: rDevice,
+        src_port: l2.localPort,
+        dst_port: rPort,
+        layer: 'L2',
+        protocol: 'stp',
+        vlan: l2.vlan,
+        stp_role: l2.role,
+        stp_state: l2.state
+      };
     }
   }
 
