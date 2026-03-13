@@ -2,6 +2,12 @@ import * as d3 from 'd3-force';
 import { TopologyData } from '../../shared/types';
 
 export function applyLayout(topology: TopologyData): TopologyData {
+  // Check if all nodes already have x and y defined (fixed layout)
+  const hasFixedLayout = topology.nodes.every(n => n.x !== undefined && n.y !== undefined);
+  if (hasFixedLayout) {
+    return topology;
+  }
+
   // Create nodes array for d3
   const nodes = topology.nodes.map(n => ({ ...n, id: n.id, x: 0, y: 0 }));
   
