@@ -14,124 +14,128 @@ function normalizePort(port: string): string {
 }
 
 export function parseRawData(rawData: string, vendor: string): TopologyData {
-  let localHostname = 'Unknown-Device';
-  let localHardware = 'Unknown';
-  let localIp = '';
-
-  // 1. Extract Local Hostname from prompt
-  const promptMatch = rawData.match(/^([a-zA-Z0-9_-]+)[#>]/m);
-  if (promptMatch && promptMatch[1]) {
-    localHostname = promptMatch[1];
-  }
-
-  // 2. Extract Hardware
-  const hwMatch = rawData.match(/(?:cisco|hardware|model)\s+(WS-C\w+|C\d+|Nexus\s+\d+|ISR\d+|ASR\d+|FPR\d+|SRX\d+)/i);
-  if (hwMatch && hwMatch[1]) {
-    localHardware = hwMatch[1];
-  }
-
   const nodesMap: Record<string, TopologyNode> = {};
   const linksMap: Record<string, TopologyLink> = {};
 
-  // Add local node
-  nodesMap[localHostname] = {
-    id: localHostname,
-    hostname: localHostname,
-    ip: localIp,
-    vendor: vendor as any,
-    hardware_model: localHardware,
-    role: 'core'
-  };
+  const extractedLinks: Array<{ sourceDevice: string, remoteDevice: string, localPort: string, remotePort: string, protocol: string, remoteIp?: string, remoteModel?: string }> = [];
+  const extractedL2Links: Array<{ sourceDevice: string, localPort: string, vlan: string, role: string, state: string }> = [];
 
-  const extractedLinks: Array<{ remoteDevice: string, localPort: string, remotePort: string, protocol: string, remoteIp?: string, remoteModel?: string }> = [];
-
-  // --- PARSE CDP DETAIL ---
-  const cdpBlocks = rawData.split(/Device ID:/i).slice(1);
-  for (const block of cdpBlocks) {
-    const deviceIdMatch = block.match(/^\s*([^\r\n]+)/);
-    const interfaceMatch = block.match(/Interface:\s*([^,]+),\s*Port ID \(outgoing port\):\s*([^\r\n]+)/i);
-    const ipMatch = block.match(/IP address:\s*([0-9.]+)/i);
-    const platformMatch = block.match(/Platform:\s*([^,]+)/i);
-
-    if (deviceIdMatch && interfaceMatch) {
-      let remoteDevice = deviceIdMatch[1].trim().split('.')[0];
-      let localPort = normalizePort(interfaceMatch[1].trim());
-      let remotePort = normalizePort(interfaceMatch[2].trim());
-      
-      extractedLinks.push({
-        remoteDevice,
-        localPort,
-        remotePort,
-        protocol: 'cdp',
-        remoteIp: ipMatch ? ipMatch[1].trim() : undefined,
-        remoteModel: platformMatch ? platformMatch[1].trim() : undefined
-      });
+  function parseBlock(hostname: string, blockData: string) {
+    if (!nodesMap[hostname]) {
+      nodesMap[hostname] = {
+        id: hostname,
+        hostname: hostname,
+        ip: '',
+        vendor: vendor as any,
+        hardware_model: 'Unknown',
+        role: hostname.toLowerCase().includes('sw') ? 'access' : (hostname.toLowerCase().includes('fw') ? 'firewall' : 'core')
+      };
     }
-  }
 
-  // --- PARSE LLDP DETAIL ---
-  const lldpBlocks = rawData.split(/Local Intf:/i).slice(1);
-  for (const block of lldpBlocks) {
-    const localIntfMatch = block.match(/^\s*([^\r\n]+)/);
-    const sysNameMatch = block.match(/System Name:\s*([^\r\n]+)/i);
-    const portIdMatch = block.match(/Port id:\s*([^\r\n]+)/i);
-    const ipMatch = block.match(/Management address:\s*([0-9.]+)/i) || block.match(/IP:\s*([0-9.]+)/i);
-
-    if (localIntfMatch && sysNameMatch && portIdMatch) {
-      let remoteDevice = sysNameMatch[1].trim().split('.')[0];
-      let localPort = normalizePort(localIntfMatch[1].trim());
-      let remotePort = normalizePort(portIdMatch[1].trim());
-
-      extractedLinks.push({
-        remoteDevice,
-        localPort,
-        remotePort,
-        protocol: 'lldp',
-        remoteIp: ipMatch ? ipMatch[1].trim() : undefined
-      });
+    const hwMatch = blockData.match(/(?:cisco|hardware|model)\s+(WS-C\w+|C\d+|Nexus\s+\d+|ISR\d+|ASR\d+|FPR\d+|SRX\d+)/i);
+    if (hwMatch && hwMatch[1] && nodesMap[hostname].hardware_model === 'Unknown') {
+      nodesMap[hostname].hardware_model = hwMatch[1];
     }
-  }
 
-  // --- PARSE TABULAR CDP/LLDP ---
-  const tabularRegex = /^([a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*)\s+([A-Za-z]+\s*\d+(?:\/\d+)*)\s+\d+\s+.*?\s+([A-Za-z]+\s*\d+(?:\/\d+)*)$/gm;
-  let match;
-  while ((match = tabularRegex.exec(rawData)) !== null) {
-    let remoteDevice = match[1].split('.')[0];
-    let localPort = normalizePort(match[2]);
-    let remotePort = normalizePort(match[3]);
+    // --- PARSE CDP DETAIL ---
+    const cdpBlocks = blockData.split(/Device ID:/i).slice(1);
+    for (const block of cdpBlocks) {
+      const deviceIdMatch = block.match(/^\s*([^\r\n]+)/);
+      const interfaceMatch = block.match(/Interface:\s*([^,]+),\s*Port ID \(outgoing port\):\s*([^\r\n]+)/i);
+      const ipMatch = block.match(/IP address:\s*([0-9.]+)/i);
+      const platformMatch = block.match(/Platform:\s*([^,]+)/i);
 
-    const exists = extractedLinks.some(l => l.remoteDevice === remoteDevice && l.localPort === localPort && l.remotePort === remotePort);
-    if (!exists) {
-      extractedLinks.push({
-        remoteDevice,
-        localPort,
-        remotePort,
-        protocol: 'cdp/lldp'
-      });
-    }
-  }
-
-  // --- PARSE SPANNING TREE (L2 TOPOLOGY) ---
-  const extractedL2Links: Array<{ localPort: string, vlan: string, role: string, state: string }> = [];
-  
-  // Split by VLAN or Instance to get context
-  const stpBlocks = rawData.split(/(?=VLAN\s*\d+|Spanning tree instance)/i);
-  for (const block of stpBlocks) {
-    const vlanMatch = block.match(/(?:VLAN|Spanning tree instance)\s*0*(\d+)/i);
-    const vlanId = vlanMatch ? vlanMatch[1] : null;
-
-    if (vlanId) {
-      // Match STP interface lines like: Gi0/1  Root FWD 4  128.1  P2p
-      const portRegex = /^([A-Za-z0-9\/\.-]+)\s+(Root|Desg|Altn|Back|Mstr|Shr|None)\s+(FWD|BLK|LRN|LIS|BKN|DIS)\s+(\d+)/gm;
-      let portMatch;
-      while ((portMatch = portRegex.exec(block)) !== null) {
-        extractedL2Links.push({
-          localPort: normalizePort(portMatch[1]),
-          vlan: vlanId,
-          role: portMatch[2],
-          state: portMatch[3]
+      if (deviceIdMatch && interfaceMatch) {
+        let remoteDevice = deviceIdMatch[1].trim().split('.')[0];
+        let localPort = normalizePort(interfaceMatch[1].trim());
+        let remotePort = normalizePort(interfaceMatch[2].trim());
+        
+        extractedLinks.push({
+          sourceDevice: hostname,
+          remoteDevice,
+          localPort,
+          remotePort,
+          protocol: 'cdp',
+          remoteIp: ipMatch ? ipMatch[1].trim() : undefined,
+          remoteModel: platformMatch ? platformMatch[1].trim() : undefined
         });
       }
+    }
+
+    // --- PARSE LLDP DETAIL ---
+    const lldpBlocks = blockData.split(/Local Intf:/i).slice(1);
+    for (const block of lldpBlocks) {
+      const localIntfMatch = block.match(/^\s*([^\r\n]+)/);
+      const sysNameMatch = block.match(/System Name:\s*([^\r\n]+)/i);
+      const portIdMatch = block.match(/Port id:\s*([^\r\n]+)/i);
+      const ipMatch = block.match(/Management address:\s*([0-9.]+)/i) || block.match(/IP:\s*([0-9.]+)/i);
+
+      if (localIntfMatch && sysNameMatch && portIdMatch) {
+        let remoteDevice = sysNameMatch[1].trim().split('.')[0];
+        let localPort = normalizePort(localIntfMatch[1].trim());
+        let remotePort = normalizePort(portIdMatch[1].trim());
+
+        extractedLinks.push({
+          sourceDevice: hostname,
+          remoteDevice,
+          localPort,
+          remotePort,
+          protocol: 'lldp',
+          remoteIp: ipMatch ? ipMatch[1].trim() : undefined
+        });
+      }
+    }
+
+    // --- PARSE TABULAR CDP/LLDP ---
+    const tabularRegex = /^([a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*)\s+([A-Za-z]+\s*\d+(?:\/\d+)*)\s+\d+\s+.*?\s+([A-Za-z]+\s*\d+(?:\/\d+)*)$/gm;
+    let match;
+    while ((match = tabularRegex.exec(blockData)) !== null) {
+      let remoteDevice = match[1].split('.')[0];
+      let localPort = normalizePort(match[2]);
+      let remotePort = normalizePort(match[3]);
+
+      const exists = extractedLinks.some(l => l.sourceDevice === hostname && l.remoteDevice === remoteDevice && l.localPort === localPort && l.remotePort === remotePort);
+      if (!exists) {
+        extractedLinks.push({
+          sourceDevice: hostname,
+          remoteDevice,
+          localPort,
+          remotePort,
+          protocol: 'cdp/lldp'
+        });
+      }
+    }
+
+    // --- PARSE SPANNING TREE (L2 TOPOLOGY) ---
+    const stpBlocks = blockData.split(/(?=VLAN\s*\d+|Spanning tree instance)/i);
+    for (const block of stpBlocks) {
+      const vlanMatch = block.match(/(?:VLAN|Spanning tree instance)\s*0*(\d+)/i);
+      const vlanId = vlanMatch ? vlanMatch[1] : null;
+
+      if (vlanId) {
+        const portRegex = /^([A-Za-z0-9\/\.-]+)\s+(Root|Desg|Altn|Back|Mstr|Shr|None)\s+(FWD|BLK|LRN|LIS|BKN|DIS)\s+(\d+)/gm;
+        let portMatch;
+        while ((portMatch = portRegex.exec(block)) !== null) {
+          extractedL2Links.push({
+            sourceDevice: hostname,
+            localPort: normalizePort(portMatch[1]),
+            vlan: vlanId,
+            role: portMatch[2],
+            state: portMatch[3]
+          });
+        }
+      }
+    }
+  }
+
+  const parts = rawData.split(/^([a-zA-Z0-9_-]+)[#>]/m);
+  if (parts.length === 1) {
+    parseBlock('Unknown-Device', rawData);
+  } else {
+    for (let i = 1; i < parts.length; i += 2) {
+      const hostname = parts[i];
+      const blockData = parts[i+1];
+      parseBlock(hostname, blockData);
     }
   }
 
@@ -139,6 +143,7 @@ export function parseRawData(rawData: string, vendor: string): TopologyData {
   let linkIdCounter = 1;
   
   for (const link of extractedLinks) {
+    const sDevice = link.sourceDevice;
     const rDevice = link.remoteDevice;
     const lPort = link.localPort;
     const rPort = link.remotePort;
@@ -157,12 +162,14 @@ export function parseRawData(rawData: string, vendor: string): TopologyData {
       if (link.remoteModel && nodesMap[rDevice].hardware_model === 'Unknown') nodesMap[rDevice].hardware_model = link.remoteModel;
     }
 
-    const linkKey = `${localHostname}_${lPort}_${rDevice}_${rPort}`;
+    const devices = [sDevice, rDevice].sort();
+    const ports = sDevice < rDevice ? [lPort, rPort] : [rPort, lPort];
+    const linkKey = `${devices[0]}_${ports[0]}_${devices[1]}_${ports[1]}`;
     
     if (!linksMap[linkKey]) {
       linksMap[linkKey] = {
         id: `l1_${linkIdCounter++}`,
-        source: localHostname,
+        source: sDevice,
         target: rDevice,
         src_port: lPort,
         dst_port: rPort,
@@ -177,33 +184,35 @@ export function parseRawData(rawData: string, vendor: string): TopologyData {
   }
 
   // Add L2 Links based on STP and L1 adjacency
-  // Group by localPort to avoid duplicating links for every VLAN on a trunk
-  const l2ByPort: Record<string, { vlan: string, role: string, state: string }> = {};
+  const l2ByPort: Record<string, { sourceDevice: string, localPort: string, vlan: string, role: string, state: string }> = {};
   for (const l2 of extractedL2Links) {
-    if (!l2ByPort[l2.localPort]) {
-      l2ByPort[l2.localPort] = l2;
-    } else if (l2ByPort[l2.localPort].state !== l2.state) {
-      l2ByPort[l2.localPort].state = 'Mixed'; // PVST/MST with different states per VLAN
+    const key = `${l2.sourceDevice}_${l2.localPort}`;
+    if (!l2ByPort[key]) {
+      l2ByPort[key] = l2;
+    } else if (l2ByPort[key].state !== l2.state) {
+      l2ByPort[key].state = 'Mixed';
     }
   }
 
-  for (const [localPort, l2] of Object.entries(l2ByPort)) {
-    // Cross-reference with L1 (CDP/LLDP) to find the remote device
-    const l1Link = extractedLinks.find(l => l.localPort === localPort);
+  for (const [key, l2] of Object.entries(l2ByPort)) {
+    const l1Link = extractedLinks.find(l => l.sourceDevice === l2.sourceDevice && l.localPort === l2.localPort);
     
-    // If we don't know the neighbor via CDP/LLDP, DO NOT create a fake "Unknown" node.
     if (!l1Link) continue;
 
+    const sDevice = l1Link.sourceDevice;
     const rDevice = l1Link.remoteDevice;
     const rPort = l1Link.remotePort;
 
-    const linkKey = `L2_${localHostname}_${localPort}_${rDevice}`;
+    const devices = [sDevice, rDevice].sort();
+    const ports = sDevice < rDevice ? [l2.localPort, rPort] : [rPort, l2.localPort];
+    const linkKey = `L2_${devices[0]}_${ports[0]}_${devices[1]}_${ports[1]}`;
+    
     if (!linksMap[linkKey]) {
       linksMap[linkKey] = {
         id: `l2_${linkIdCounter++}`,
-        source: localHostname,
+        source: sDevice,
         target: rDevice,
-        src_port: `${localPort} > ${l2.state}`,
+        src_port: `${l2.localPort} > ${l2.state}`,
         dst_port: rPort,
         layer: 'L2',
         protocol: 'stp',
@@ -211,6 +220,15 @@ export function parseRawData(rawData: string, vendor: string): TopologyData {
         stp_role: l2.role,
         stp_state: l2.state
       };
+    } else {
+      if (linksMap[linkKey].source === sDevice) {
+         linksMap[linkKey].src_port = `${l2.localPort} > ${l2.state}`;
+      } else {
+         linksMap[linkKey].dst_port = `${l2.localPort} > ${l2.state}`;
+         if (l2.state === 'BLK' || l2.state === 'Altn' || l2.state === 'DIS') {
+             linksMap[linkKey].stp_state = l2.state;
+         }
+      }
     }
   }
 
