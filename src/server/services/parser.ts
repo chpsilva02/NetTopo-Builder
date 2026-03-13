@@ -113,7 +113,7 @@ export function parseRawData(rawData: string, vendor: string): TopologyData {
       const line = lines[i].trim();
       if (!line || line.startsWith('Device ID') || line.startsWith('Capability') || line.startsWith('Local Intf')) continue;
       
-      const intfRegex = /(?:^|\s)([A-Za-z]{2,}\s*[\d\/\.]+)\s+\d+\s+.*?\s+([A-Za-z]*\s*[\d\/\.]+|eth\d+|mgmt\d+)$/i;
+      const intfRegex = /(?:^|\s)([A-Za-z0-9]+\s*[\d\/\.]+)\s+\d+\s+.*?\s+(\S+)$/i;
       const match = line.match(intfRegex);
       
       if (match) {
@@ -179,7 +179,7 @@ export function parseRawData(rawData: string, vendor: string): TopologyData {
     parseBlock('Unknown-Device', rawData);
   } else {
     for (let i = 1; i < parts.length; i += 2) {
-      const hostname = parts[i];
+      const hostname = parts[i].split('.')[0]; // Strip domain to match CDP
       const blockData = parts[i+1];
       parseBlock(hostname, blockData);
     }
