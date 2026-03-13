@@ -20,6 +20,7 @@ export interface TopologyNode {
   role: 'core' | 'distribution' | 'access' | 'router' | 'firewall' | 'unknown';
   x?: number;
   y?: number;
+  isRoot?: boolean;
 }
 
 export interface TopologyLink {
@@ -38,8 +39,12 @@ export interface TopologyLink {
   
   // Layer 2 specific
   vlan?: string; // e.g., '10,20,30' or 'Trunk'
-  stp_state?: string; // e.g., 'FWD', 'BLK'
-  stp_role?: string; // e.g., 'Root', 'Desg', 'Altn'
+  stp_state?: string; // Legacy
+  stp_role?: string; // Legacy
+  src_stp_state?: string; // e.g., 'FWD', 'BLK'
+  src_stp_role?: string; // e.g., 'Root', 'Desg', 'Altn'
+  dst_stp_state?: string;
+  dst_stp_role?: string;
   port_channel?: string; // e.g., 'Po1'
   
   // Layer 3 specific

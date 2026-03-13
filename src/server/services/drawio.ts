@@ -17,8 +17,7 @@ function buildLinkCenterLabel(link: TopologyLink, layer: string): string {
     if (link.state) label += `<span style="color: #666666; font-size: 10px;">State: ${link.state}</span><br/>`;
     if (link.transceiver) label += `<span style="color: #666666; font-size: 10px;">Tx: ${link.transceiver}</span>`;
   } else if (layer === 'L2') {
-    if (link.vlan) label += `<span style="color: #666666; font-size: 10px;">VLAN: ${link.vlan}</span><br/>`;
-    if (link.stp_state) label += `<span style="color: #666666; font-size: 10px;">STP: ${link.stp_state} ${link.stp_role ? `(${link.stp_role})` : ''}</span><br/>`;
+    // Removed verbose VLAN/STP text from center label as requested
     if (link.port_channel) label += `<span style="color: #666666; font-size: 10px;">Po: ${link.port_channel}</span>`;
   } else if (layer === 'L3') {
     label += `<span style="color: #666666; font-size: 10px;">Proto: ${link.protocol.toUpperCase()}</span><br/>`;
@@ -68,6 +67,23 @@ export function generateDrawioXml(topology: TopologyData): string {
         height: '60',
         as: 'geometry'
       });
+
+      if (layer === 'L2' && node.isRoot) {
+        const rootLabel = rootCell.ele('mxCell', {
+          id: `${layer}_node_${node.id}_root_label`,
+          value: 'ROOT BRIDGE',
+          style: 'text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontColor=#FF0000;fontStyle=1;fontSize=12;',
+          vertex: '1',
+          parent: `root_${layer}_1`
+        });
+        rootLabel.ele('mxGeometry', {
+          x: (node.x !== undefined ? node.x - 20 : -20).toString(),
+          y: (node.y !== undefined ? node.y - 25 : -25).toString(),
+          width: '100',
+          height: '20',
+          as: 'geometry'
+        });
+      }
     });
 
     // Add links for this layer
@@ -78,15 +94,6 @@ export function generateDrawioXml(topology: TopologyData): string {
       
       let edgeStyle = 'endArrow=none;html=1;rounded=0;strokeWidth=2;strokeColor=#444444;labelBackgroundColor=#ffffff;fontColor=#333333;fontSize=10;';
       
-      // Apply specific styling for L2 STP states
-      if (layer === 'L2' && link.stp_state) {
-        if (link.stp_state === 'BLK' || link.stp_state === 'Altn' || link.stp_state === 'DIS') {
-          edgeStyle = 'endArrow=none;html=1;rounded=0;strokeWidth=2;strokeColor=#ff0000;dashed=1;labelBackgroundColor=#ffffff;fontColor=#333333;fontSize=10;';
-        } else if (link.stp_state === 'FWD') {
-          edgeStyle = 'endArrow=none;html=1;rounded=0;strokeWidth=2;strokeColor=#008000;labelBackgroundColor=#ffffff;fontColor=#333333;fontSize=10;';
-        }
-      }
-
       const edge = rootCell.ele('mxCell', {
         id: edgeId,
         value: centerLabel,
@@ -98,11 +105,33 @@ export function generateDrawioXml(topology: TopologyData): string {
       });
       edge.ele('mxGeometry', { relative: '1', as: 'geometry' });
 
+      const formatStpPort = (port: string, role?: string, state?: string) => {
+        if (layer !== 'L2' || (!role && !state)) return port;
+        
+        let icon = '';
+        if (state === 'FWD') icon = '🟢 ';
+        else if (state === 'BLK' || state === 'Altn' || state === 'DIS') icon = '❌ ';
+        else if (state) icon = '🟠 ';
+        
+        let roleStr = '';
+        if (role === 'Desg') roleStr = 'DP';
+        else if (role === 'Root') roleStr = 'RP';
+        else if (role === 'Altn') roleStr = 'ALT';
+        else if (role === 'Back') roleStr = 'BKP';
+        else if (role) roleStr = role.toUpperCase();
+        
+        let label = `${icon}${port}`;
+        if (roleStr) {
+          label += `<br><font color="#FF0000"><b>${roleStr}</b></font>`;
+        }
+        return label;
+      };
+
       // Source Port Label
       if (link.src_port) {
         const srcLabel = rootCell.ele('mxCell', {
           id: `${edgeId}_src_label`,
-          value: link.src_port,
+          value: formatStpPort(link.src_port, link.src_stp_role, link.src_stp_state),
           style: 'edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];labelBackgroundColor=#ffffff;fontSize=11;fontColor=#333333;',
           vertex: '1',
           connectable: '0',
@@ -115,7 +144,7 @@ export function generateDrawioXml(topology: TopologyData): string {
       if (link.dst_port) {
         const dstLabel = rootCell.ele('mxCell', {
           id: `${edgeId}_dst_label`,
-          value: link.dst_port,
+          value: formatStpPort(link.dst_port, link.dst_stp_role, link.dst_stp_state),
           style: 'edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];labelBackgroundColor=#ffffff;fontSize=11;fontColor=#333333;',
           vertex: '1',
           connectable: '0',

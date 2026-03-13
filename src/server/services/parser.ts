@@ -174,6 +174,10 @@ export function parseRawData(rawData: string, vendor: string): TopologyData {
     // --- PARSE SPANNING TREE (L2 TOPOLOGY) ---
     const stpBlocks = blockData.split(/(?=VLAN\s*\d+|Spanning tree instance)/i);
     for (const block of stpBlocks) {
+      if (/This bridge is the root/i.test(block)) {
+        nodesMap[hostname].isRoot = true;
+      }
+      
       const vlanMatch = block.match(/(?:VLAN|Spanning tree instance)\s*0*(\d+)/i);
       const vlanId = vlanMatch ? vlanMatch[1] : null;
 
@@ -269,34 +273,32 @@ export function parseRawData(rawData: string, vendor: string): TopologyData {
 
     const sDevice = l1Link.sourceDevice;
     const rDevice = l1Link.remoteDevice;
+    const lPort = l1Link.localPort;
     const rPort = l1Link.remotePort;
 
     const devices = [sDevice, rDevice].sort();
-    const ports = sDevice < rDevice ? [l2.localPort, rPort] : [rPort, l2.localPort];
+    const ports = sDevice < rDevice ? [lPort, rPort] : [rPort, lPort];
     const linkKey = `L2_${devices[0]}_${ports[0]}_${devices[1]}_${ports[1]}`;
     
     if (!linksMap[linkKey]) {
       linksMap[linkKey] = {
         id: `l2_${linkIdCounter++}`,
-        source: sDevice,
-        target: rDevice,
-        src_port: `${l2.localPort} > ${l2.state}`,
-        dst_port: rPort,
+        source: devices[0],
+        target: devices[1],
+        src_port: ports[0],
+        dst_port: ports[1],
         layer: 'L2',
         protocol: 'stp',
-        vlan: l2.vlan,
-        stp_role: l2.role,
-        stp_state: l2.state
+        vlan: l2.vlan
       };
+    }
+    
+    if (linksMap[linkKey].source === l2.sourceDevice) {
+       linksMap[linkKey].src_stp_role = l2.role;
+       linksMap[linkKey].src_stp_state = l2.state;
     } else {
-      if (linksMap[linkKey].source === sDevice) {
-         linksMap[linkKey].src_port = `${l2.localPort} > ${l2.state}`;
-      } else {
-         linksMap[linkKey].dst_port = `${l2.localPort} > ${l2.state}`;
-         if (l2.state === 'BLK' || l2.state === 'Altn' || l2.state === 'DIS') {
-             linksMap[linkKey].stp_state = l2.state;
-         }
-      }
+       linksMap[linkKey].dst_stp_role = l2.role;
+       linksMap[linkKey].dst_stp_state = l2.state;
     }
   }
 
@@ -331,8 +333,8 @@ export function parseRawData(rawData: string, vendor: string): TopologyData {
       { id: 'l1_3', source: 'vit_swc', target: 'edge_fw1', src_port: 'ge-0/0/0', dst_port: 'Gi0/0/2', layer: 'L1', protocol: 'lldp' },
       
       // L2 Links (Logical)
-      { id: 'l2_1', source: 'acc_sw2', target: 'vit_swc', src_port: 'Po1', dst_port: 'Po1', layer: 'L2', protocol: 'stp', vlan: 'Trunk (10,20,30)', stp_state: 'FWD', stp_role: 'Root', port_channel: 'Po1' },
-      { id: 'l2_2', source: 'dist_sw1', target: 'vit_swc', src_port: 'Po2', dst_port: 'Po2', layer: 'L2', protocol: 'stp', vlan: 'Trunk (10,20,30)', stp_state: 'FWD', stp_role: 'Desg', port_channel: 'Po2' },
+      { id: 'l2_1', source: 'acc_sw2', target: 'vit_swc', src_port: 'Po1', dst_port: 'Po1', layer: 'L2', protocol: 'stp', vlan: 'Trunk (10,20,30)', src_stp_state: 'FWD', src_stp_role: 'Root', dst_stp_state: 'FWD', dst_stp_role: 'Desg', port_channel: 'Po1' },
+      { id: 'l2_2', source: 'dist_sw1', target: 'vit_swc', src_port: 'Po2', dst_port: 'Po2', layer: 'L2', protocol: 'stp', vlan: 'Trunk (10,20,30)', src_stp_state: 'FWD', src_stp_role: 'Desg', dst_stp_state: 'FWD', dst_stp_role: 'Root', port_channel: 'Po2' },
       
       // L3 Links (Routing)
       { id: 'l3_1', source: 'dist_sw1', target: 'vit_swc', src_port: 'Vlan10', dst_port: 'Vlan10', layer: 'L3', protocol: 'ospf', src_ip: '10.0.10.1', dst_ip: '10.0.10.2', subnet: '/24', routing_area: 'Area 0', metric: '10' },
