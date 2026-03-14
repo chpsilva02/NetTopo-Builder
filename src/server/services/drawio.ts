@@ -23,8 +23,13 @@ function buildLinkCenterLabel(link: TopologyLink, layer: string): string {
     // Removed verbose VLAN/STP text from center label as requested
     if (link.port_channel) label += `<span style="color: #666666; font-size: 10px;">Po: ${link.port_channel}</span>`;
   } else if (layer === 'L3') {
-    // In L3, we show interface and IP on the ends, so center label is minimal or empty
-    if (link.protocol !== 'connected') {
+    if (link.l3_routes && link.l3_routes.length > 0) {
+      const labels = link.l3_routes.map(r => {
+        const protoName = r.protocol.toUpperCase();
+        return `<span style="color: #005073; font-size: 11px; font-weight: bold;">${protoName} --&gt; ${r.prefix}</span>`;
+      });
+      label += labels.join('<br/>');
+    } else if (link.protocol !== 'connected') {
       label += `<span style="color: #666666; font-size: 10px;">${link.protocol.toUpperCase()}</span>`;
     }
   }
@@ -143,6 +148,23 @@ export function generateDrawioXml(topology: TopologyData): string {
       
       let edgeStyle = 'endArrow=none;html=1;rounded=0;strokeWidth=2;strokeColor=#444444;labelBackgroundColor=#ffffff;fontColor=#333333;fontSize=10;';
       
+      if (layer === 'L3' && link.l3_routes && link.l3_routes.length > 0) {
+        let hasForward = false; // source -> target
+        let hasBackward = false; // target -> source
+        link.l3_routes.forEach(r => {
+          if (r.source === link.source) hasForward = true;
+          if (r.source === link.target) hasBackward = true;
+        });
+
+        if (hasForward && hasBackward) {
+          edgeStyle = edgeStyle.replace('endArrow=none', 'endArrow=block;startArrow=block');
+        } else if (hasForward) {
+          edgeStyle = edgeStyle.replace('endArrow=none', 'endArrow=block');
+        } else if (hasBackward) {
+          edgeStyle = edgeStyle.replace('endArrow=none', 'startArrow=block');
+        }
+      }
+
       const edge = rootCell.ele('mxCell', {
         id: edgeId,
         value: centerLabel,

@@ -62,6 +62,12 @@ export interface TopologyLink {
   routing_area?: string; // e.g., 'Area 0' (OSPF)
   routing_as?: string; // e.g., 'AS 65001' (BGP)
   metric?: string; // Cost/Metric
+  l3_routes?: {
+    source: string;
+    target: string;
+    protocol: string;
+    prefix: string;
+  }[];
 }
 
 export interface TopologyData {

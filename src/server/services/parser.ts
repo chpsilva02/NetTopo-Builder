@@ -386,34 +386,53 @@ export function parseRawData(rawData: string, vendor: string): TopologyData {
   // --- BUILD L3 TOPOLOGY ---
   const l3LinksMap: Record<string, TopologyLink> = {};
 
-  function addL3Link(source: string, targetIp: string, protocol: string, srcPort: string = '', extra: any = {}) {
+  function getL3Link(source: string, targetIp: string): TopologyLink | null {
     const targetDevice = ipToDevice[targetIp] || targetIp;
-    if (source === targetDevice) return; // Ignore self links
+    if (source === targetDevice) return null; // Ignore self links
 
     const devices = [source, targetDevice].sort();
-    const linkKey = `L3_${devices[0]}_${devices[1]}_${protocol}`;
+    const linkKey = `L3_${devices[0]}_${devices[1]}`;
 
     if (!l3LinksMap[linkKey]) {
       l3LinksMap[linkKey] = {
         id: `l3_${linkIdCounter++}`,
-        source: source,
-        target: targetDevice,
-        src_port: srcPort,
+        source: devices[0],
+        target: devices[1],
+        src_port: '',
         dst_port: '',
         layer: 'L3',
-        protocol: protocol as any,
-        dst_ip: targetIp,
-        ...extra
+        protocol: 'connected',
+        l3_routes: []
       };
     }
+    
+    const link = l3LinksMap[linkKey];
+    if (devices[0] === targetDevice && !link.src_ip) {
+      link.src_ip = targetIp;
+    } else if (devices[1] === targetDevice && !link.dst_ip) {
+      link.dst_ip = targetIp;
+    }
+    
+    return link;
   }
 
   for (const ospf of extractedOspf) {
-    addL3Link(ospf.sourceDevice, ospf.neighborIp, 'ospf', ospf.localPort, { state: ospf.state });
+    const link = getL3Link(ospf.sourceDevice, ospf.neighborIp);
+    if (link) {
+      link.protocol = 'ospf';
+      if (link.source === ospf.sourceDevice) link.src_port = ospf.localPort;
+      else link.dst_port = ospf.localPort;
+      link.state = ospf.state;
+    }
   }
 
   for (const bgp of extractedBgp) {
-    addL3Link(bgp.sourceDevice, bgp.neighborIp, 'bgp', '', { routing_as: `AS ${bgp.as}`, state: bgp.state });
+    const link = getL3Link(bgp.sourceDevice, bgp.neighborIp);
+    if (link) {
+      link.protocol = 'bgp';
+      link.routing_as = `AS ${bgp.as}`;
+      link.state = bgp.state;
+    }
   }
 
   for (const route of extractedRoutes) {
@@ -426,40 +445,27 @@ export function parseRawData(rawData: string, vendor: string): TopologyData {
     else if (code.startsWith('i')) proto = 'isis';
     else continue;
 
-    const targetDevice = ipToDevice[route.nextHop] || route.nextHop;
-    const devices = [route.sourceDevice, targetDevice].sort();
-    const linkKey = `L3_${devices[0]}_${devices[1]}_${proto}`;
-    
-    if (!l3LinksMap[linkKey]) {
-      addL3Link(route.sourceDevice, route.nextHop, proto, route.localPort, { subnet: route.prefix });
-    }
-
-    // Add Cloud node for destination network
-    if (route.prefix && route.prefix !== '0.0.0.0/0') {
-      const cloudId = `cloud_${route.prefix.replace(/[\/\.]/g, '_')}`;
-      if (!nodesMap[cloudId]) {
-        nodesMap[cloudId] = {
-          id: cloudId,
-          hostname: route.prefix,
-          ip: '',
-          vendor: 'unknown',
-          hardware_model: 'Network',
-          role: 'cloud'
-        };
+    const link = getL3Link(route.sourceDevice, route.nextHop);
+    if (link) {
+      if (link.protocol === 'connected' || link.protocol === 'unknown') {
+        link.protocol = proto as any;
       }
-      
-      // Link target device to cloud
-      const cloudLinkKey = `L3_${targetDevice}_${cloudId}`;
-      if (!l3LinksMap[cloudLinkKey]) {
-        l3LinksMap[cloudLinkKey] = {
-          id: `l3_${linkIdCounter++}`,
-          source: targetDevice,
-          target: cloudId,
-          src_port: '',
-          dst_port: '',
-          layer: 'L3',
-          protocol: 'connected'
-        };
+      if (route.localPort) {
+        if (link.source === route.sourceDevice && !link.src_port) link.src_port = route.localPort;
+        if (link.target === route.sourceDevice && !link.dst_port) link.dst_port = route.localPort;
+      }
+
+      if (route.prefix && route.prefix !== '0.0.0.0/0') {
+        if (!link.l3_routes) link.l3_routes = [];
+        const exists = link.l3_routes.find(r => r.source === route.sourceDevice && r.prefix === route.prefix && r.protocol === proto);
+        if (!exists) {
+          link.l3_routes.push({
+            source: route.sourceDevice,
+            target: link.source === route.sourceDevice ? link.target : link.source,
+            protocol: proto,
+            prefix: route.prefix
+          });
+        }
       }
     }
   }
