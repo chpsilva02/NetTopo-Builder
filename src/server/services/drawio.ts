@@ -50,8 +50,21 @@ export function generateDrawioXml(topology: TopologyData): string {
     rootCell.ele('mxCell', { id: `root_${layer}_0` });
     rootCell.ele('mxCell', { id: `root_${layer}_1`, parent: `root_${layer}_0` });
 
+    // Add links for this layer
+    const layerLinks = topology.links.filter(l => l.layer === layer);
+    const layerNodeIds = new Set<string>();
+    layerLinks.forEach(l => {
+      layerNodeIds.add(l.source);
+      layerNodeIds.add(l.target);
+    });
+
     // Add nodes
     topology.nodes.forEach(node => {
+      // Skip nodes that do not participate in this layer's links (unless there are no links at all)
+      if (layerLinks.length > 0 && !layerNodeIds.has(node.id)) {
+        return;
+      }
+
       const shape = getDrawioShape(node.hardware_model, node.role);
       const vertex = rootCell.ele('mxCell', {
         id: `${layer}_node_${node.id}`,
@@ -87,7 +100,6 @@ export function generateDrawioXml(topology: TopologyData): string {
     });
 
     // Add links for this layer
-    const layerLinks = topology.links.filter(l => l.layer === layer);
     layerLinks.forEach(link => {
       const edgeId = `${layer}_link_${link.id}`;
       const centerLabel = buildLinkCenterLabel(link, layer);
