@@ -3,6 +3,9 @@ import { TopologyData, TopologyNode, TopologyLink } from '../../shared/types';
 import { getDrawioShape } from './icons';
 
 function buildNodeLabel(node: TopologyNode): string {
+  if (node.role === 'cloud') {
+    return `<b>${node.hostname}</b>`;
+  }
   let label = `<b>${node.hostname}</b><br/>(${node.ip})<br/>${node.hardware_model}`;
   if (node.os_version) label += `<br/><span style="color: #666666; font-size: 10px;">OS: ${node.os_version}</span>`;
   if (node.serial_number) label += `<br/><span style="color: #666666; font-size: 10px;">SN: ${node.serial_number}</span>`;
@@ -20,12 +23,10 @@ function buildLinkCenterLabel(link: TopologyLink, layer: string): string {
     // Removed verbose VLAN/STP text from center label as requested
     if (link.port_channel) label += `<span style="color: #666666; font-size: 10px;">Po: ${link.port_channel}</span>`;
   } else if (layer === 'L3') {
-    label += `<span style="color: #666666; font-size: 10px;">Proto: ${link.protocol.toUpperCase()}</span><br/>`;
-    if (link.src_ip && link.dst_ip) label += `<span style="color: #666666; font-size: 10px;">${link.src_ip} ➔ ${link.dst_ip}</span><br/>`;
-    if (link.subnet) label += `<span style="color: #666666; font-size: 10px;">Subnet: ${link.subnet}</span><br/>`;
-    if (link.routing_area) label += `<span style="color: #666666; font-size: 10px;">Area: ${link.routing_area}</span><br/>`;
-    if (link.routing_as) label += `<span style="color: #666666; font-size: 10px;">AS: ${link.routing_as}</span><br/>`;
-    if (link.metric) label += `<span style="color: #666666; font-size: 10px;">Metric: ${link.metric}</span>`;
+    // In L3, we show interface and IP on the ends, so center label is minimal or empty
+    if (link.protocol !== 'connected') {
+      label += `<span style="color: #666666; font-size: 10px;">${link.protocol.toUpperCase()}</span>`;
+    }
   }
   return label;
 }
@@ -97,6 +98,42 @@ export function generateDrawioXml(topology: TopologyData): string {
           as: 'geometry'
         });
       }
+
+      if (layer === 'L3' && node.routes && node.routes.length > 0) {
+        let tableHtml = `<table border="1" cellpadding="4" cellspacing="0" style="border-collapse: collapse; font-size: 10px; width: 100%; background-color: #ffffff;">`;
+        tableHtml += `<tr><th colspan="3" style="background-color: #f0f0f0;">Routing Table</th></tr>`;
+        tableHtml += `<tr><th>Destination</th><th>NextHop</th><th>Interface</th></tr>`;
+        node.routes.forEach(r => {
+          tableHtml += `<tr><td>${r.destination}</td><td>${r.nextHop}</td><td>${r.interface}</td></tr>`;
+        });
+        tableHtml += `</table>`;
+
+        const tableNode = rootCell.ele('mxCell', {
+          id: `${layer}_node_${node.id}_routes`,
+          value: tableHtml,
+          style: 'text;html=1;whiteSpace=wrap;overflow=hidden;rounded=0;shadow=1;',
+          vertex: '1',
+          parent: `root_${layer}_1`
+        });
+        tableNode.ele('mxGeometry', {
+          x: (node.x !== undefined ? node.x - 100 : -100).toString(),
+          y: (node.y !== undefined ? node.y - 120 : -120).toString(),
+          width: '260',
+          height: (node.routes.length * 20 + 40).toString(),
+          as: 'geometry'
+        });
+
+        // Draw a line connecting the table to the router
+        const tableEdge = rootCell.ele('mxCell', {
+          id: `${layer}_node_${node.id}_routes_edge`,
+          style: 'endArrow=none;html=1;rounded=0;strokeWidth=1;strokeColor=#888888;',
+          edge: '1',
+          parent: `root_${layer}_1`,
+          source: `${layer}_node_${node.id}_routes`,
+          target: `${layer}_node_${node.id}`
+        });
+        tableEdge.ele('mxGeometry', { relative: '1', as: 'geometry' });
+      }
     });
 
     // Add links for this layer
@@ -140,29 +177,51 @@ export function generateDrawioXml(topology: TopologyData): string {
       };
 
       // Source Port Label
-      if (link.src_port) {
-        const srcLabel = rootCell.ele('mxCell', {
-          id: `${edgeId}_src_label`,
-          value: formatStpPort(link.src_port, link.src_stp_role, link.src_stp_state),
-          style: 'edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];labelBackgroundColor=#ffffff;fontSize=11;fontColor=#333333;',
-          vertex: '1',
-          connectable: '0',
-          parent: edgeId
-        });
-        srcLabel.ele('mxGeometry', { x: '-0.7', relative: '1', as: 'geometry' }).ele('mxPoint', { as: 'offset' });
+      if (link.src_port || (layer === 'L3' && link.src_ip)) {
+        let srcVal = link.src_port || '';
+        if (layer === 'L3') {
+          if (link.src_ip) {
+            srcVal = srcVal ? `${srcVal}<br/>${link.src_ip}` : link.src_ip;
+          }
+        } else {
+          srcVal = formatStpPort(link.src_port, link.src_stp_role, link.src_stp_state);
+        }
+        
+        if (srcVal) {
+          const srcLabel = rootCell.ele('mxCell', {
+            id: `${edgeId}_src_label`,
+            value: srcVal,
+            style: 'edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];labelBackgroundColor=#ffffff;fontSize=11;fontColor=#333333;',
+            vertex: '1',
+            connectable: '0',
+            parent: edgeId
+          });
+          srcLabel.ele('mxGeometry', { x: '-0.7', relative: '1', as: 'geometry' }).ele('mxPoint', { as: 'offset' });
+        }
       }
 
       // Target Port Label
-      if (link.dst_port) {
-        const dstLabel = rootCell.ele('mxCell', {
-          id: `${edgeId}_dst_label`,
-          value: formatStpPort(link.dst_port, link.dst_stp_role, link.dst_stp_state),
-          style: 'edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];labelBackgroundColor=#ffffff;fontSize=11;fontColor=#333333;',
-          vertex: '1',
-          connectable: '0',
-          parent: edgeId
-        });
-        dstLabel.ele('mxGeometry', { x: '0.7', relative: '1', as: 'geometry' }).ele('mxPoint', { as: 'offset' });
+      if (link.dst_port || (layer === 'L3' && link.dst_ip)) {
+        let dstVal = link.dst_port || '';
+        if (layer === 'L3') {
+          if (link.dst_ip) {
+            dstVal = dstVal ? `${dstVal}<br/>${link.dst_ip}` : link.dst_ip;
+          }
+        } else {
+          dstVal = formatStpPort(link.dst_port, link.dst_stp_role, link.dst_stp_state);
+        }
+
+        if (dstVal) {
+          const dstLabel = rootCell.ele('mxCell', {
+            id: `${edgeId}_dst_label`,
+            value: dstVal,
+            style: 'edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];labelBackgroundColor=#ffffff;fontSize=11;fontColor=#333333;',
+            vertex: '1',
+            connectable: '0',
+            parent: edgeId
+          });
+          dstLabel.ele('mxGeometry', { x: '0.7', relative: '1', as: 'geometry' }).ele('mxPoint', { as: 'offset' });
+        }
       }
     });
   });

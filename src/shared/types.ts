@@ -7,6 +7,13 @@ export interface CommandProfile {
   hardware: string[];
 }
 
+export interface RouteEntry {
+  destination: string;
+  nextHop: string;
+  interface: string;
+  protocol: string;
+}
+
 export interface TopologyNode {
   id: string;
   hostname: string;
@@ -17,10 +24,11 @@ export interface TopologyNode {
   serial_number?: string;
   uptime?: string;
   mac_address?: string;
-  role: 'core' | 'distribution' | 'access' | 'router' | 'firewall' | 'unknown';
+  role: 'core' | 'distribution' | 'access' | 'router' | 'firewall' | 'cloud' | 'unknown';
   x?: number;
   y?: number;
   isRoot?: boolean;
+  routes?: RouteEntry[];
 }
 
 export interface TopologyLink {

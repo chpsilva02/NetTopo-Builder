@@ -34,6 +34,8 @@ export function getDrawioShape(hardwareModel: string, role: string): string {
       return 'shape=mxgraph.cisco19.rect;prIcon=firewall;fillColor=#FAFAFA;strokeColor=#005073;';
     case 'endpoint':
       return 'shape=mxgraph.cisco19.rect;prIcon=router;fillColor=#FAFAFA;strokeColor=#005073;';
+    case 'cloud':
+      return 'ellipse;shape=cloud;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#005073;fontColor=#005073;strokeWidth=2;';
     case 'access':
     default:
       return 'shape=mxgraph.cisco19.rect;prIcon=l2_switch;fillColor=#FAFAFA;strokeColor=#005073;';

@@ -255,12 +255,23 @@ export function parseRawData(rawData: string, vendor: string): TopologyData {
           prefix = routeHeaderMatch[2].trim();
         }
         if (code) {
+          const nextHop = viaMatch[1];
+          const localPort = viaMatch[2] ? normalizePort(viaMatch[2]) : '';
+          
           extractedRoutes.push({
             sourceDevice: hostname,
             code: code,
             prefix: prefix,
-            nextHop: viaMatch[1],
-            localPort: viaMatch[2] ? normalizePort(viaMatch[2]) : ''
+            nextHop: nextHop,
+            localPort: localPort
+          });
+
+          if (!nodesMap[hostname].routes) nodesMap[hostname].routes = [];
+          nodesMap[hostname].routes.push({
+            destination: prefix,
+            nextHop: nextHop,
+            interface: localPort,
+            protocol: code
           });
         }
       }
@@ -421,6 +432,35 @@ export function parseRawData(rawData: string, vendor: string): TopologyData {
     
     if (!l3LinksMap[linkKey]) {
       addL3Link(route.sourceDevice, route.nextHop, proto, route.localPort, { subnet: route.prefix });
+    }
+
+    // Add Cloud node for destination network
+    if (route.prefix && route.prefix !== '0.0.0.0/0') {
+      const cloudId = `cloud_${route.prefix.replace(/[\/\.]/g, '_')}`;
+      if (!nodesMap[cloudId]) {
+        nodesMap[cloudId] = {
+          id: cloudId,
+          hostname: route.prefix,
+          ip: '',
+          vendor: 'unknown',
+          hardware_model: 'Network',
+          role: 'cloud'
+        };
+      }
+      
+      // Link target device to cloud
+      const cloudLinkKey = `L3_${targetDevice}_${cloudId}`;
+      if (!l3LinksMap[cloudLinkKey]) {
+        l3LinksMap[cloudLinkKey] = {
+          id: `l3_${linkIdCounter++}`,
+          source: targetDevice,
+          target: cloudId,
+          src_port: '',
+          dst_port: '',
+          layer: 'L3',
+          protocol: 'connected'
+        };
+      }
     }
   }
 
