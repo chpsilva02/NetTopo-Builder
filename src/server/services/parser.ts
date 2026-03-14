@@ -390,6 +390,28 @@ export function parseRawData(rawData: string, vendor: string): TopologyData {
     const targetDevice = ipToDevice[targetIp] || targetIp;
     if (source === targetDevice) return null; // Ignore self links
 
+    if (!nodesMap[source]) {
+      nodesMap[source] = {
+        id: source,
+        hostname: source,
+        ip: '',
+        vendor: 'unknown',
+        hardware_model: 'Unknown',
+        role: 'unknown'
+      };
+    }
+
+    if (!nodesMap[targetDevice]) {
+      nodesMap[targetDevice] = {
+        id: targetDevice,
+        hostname: targetDevice,
+        ip: targetIp,
+        vendor: 'unknown',
+        hardware_model: 'Unknown',
+        role: 'router'
+      };
+    }
+
     const devices = [source, targetDevice].sort();
     const linkKey = `L3_${devices[0]}_${devices[1]}`;
 
